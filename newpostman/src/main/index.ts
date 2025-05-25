@@ -2,6 +2,7 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { net } from 'electron'
 
 function createWindow(): void {
   // Create the browser window.
@@ -13,7 +14,8 @@ function createWindow(): void {
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      webSecurity: false
     }
   })
 
@@ -70,5 +72,69 @@ app.on('window-all-closed', () => {
   }
 })
 
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.
+ipcMain.handle('fetch-data', async (_, url, options = { method: 'GET' }) => {
+  return new Promise((resolve, reject) => {
+    try {
+      const queryString = options.queryParams
+        ? `?${new URLSearchParams(options.queryParams).toString()}`
+        : ''
+
+      const fullUrl = url + queryString
+      const request = net.request({
+        method: options.method,
+        url: fullUrl
+      })
+
+      console.log(options)
+
+      request.setHeader('Content-Type', 'application/json')
+      if (options.headers) {
+        Object.entries(options.headers).forEach(([key, value]) => {
+          request.setHeader(key, value)
+        })
+      }
+
+      request.on('response', (response) => {
+        let data = ''
+
+        response.on('data', (chunk) => {
+          data += chunk
+        })
+
+        response.on('end', () => {
+          if (!response.statusCode || response.statusCode >= 400) {
+            reject(new Error(`HTTP error! status: ${response.statusCode}`))
+            return
+          }
+
+          if (response.statusCode === 204) {
+            resolve(null)
+            return
+          }
+
+          try {
+            const jsonData = JSON.parse(data)
+            resolve(jsonData)
+          } catch (e) {
+            resolve(data)
+          }
+        })
+      })
+
+      request.on('error', (error) => {
+        reject(error)
+      })
+
+      if (options.body && options.method !== 'GET' && options.method !== 'HEAD') {
+        const bodyData =
+          typeof options.body === 'string' ? options.body : JSON.stringify(options.body)
+        request.write(bodyData)
+      }
+
+      request.end()
+    } catch (error) {
+      reject(error)
+    }
+  })
+})
+
